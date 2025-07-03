@@ -2,15 +2,15 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Grist Stock Metrics Downloader</title>
-  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <title>Stock Metrics Downloader</title>
   <style>
     body { font-family: sans-serif; padding: 1.5em; }
     h2 { margin-top: 0; }
-    #tickerDisplay, #sourceUrl { margin: 0.5em 0; font-size: 1em; }
+    #tickerInput, #sourceUrl { margin: 0.5em 0; font-size: 1em; }
+    #tickerInput input { padding: 0.5em; font-size: 1em; }
     #sourceUrl a { color: #1a73e8; text-decoration: none; }
     #sourceUrl a:hover { text-decoration: underline; }
-    #downloadBtn {
+    #submitBtn, #downloadBtn {
       padding: 0.6em 1.2em;
       font-size: 1em;
       background-color: #1a73e8;
@@ -19,9 +19,10 @@
       border-radius: 4px;
       cursor: pointer;
       transition: background-color 0.2s;
+      margin-right: 0.5em;
     }
-    #downloadBtn:hover { background-color: #1557b0; }
-    #downloadBtn:disabled {
+    #submitBtn:hover, #downloadBtn:hover { background-color: #1557b0; }
+    #submitBtn:disabled, #downloadBtn:disabled {
       background-color: #cccccc;
       cursor: not-allowed;
     }
@@ -30,10 +31,13 @@
 </head>
 <body>
   <h2>Download Stock Quarterly History</h2>
-  <div id="tickerDisplay">No ticker selected.</div>
+  <div id="tickerInput">
+    <input type="text" id="ticker" placeholder="Enter stock ticker (e.g., AAPL)" />
+    <button id="submitBtn">Submit</button>
+  </div>
   <div id="sourceUrl">Source: <a href="https://financialmodelingprep.com/api/v3/key-metrics/" target="_blank">Financial Modeling Prep</a></div>
   <button id="downloadBtn" disabled>Download CSV</button>
-  <div id="status">Initializing...</div>
+  <div id="status">Enter a ticker and click Submit.</div>
 
   <script>
     const API_KEY = "59fxpu34TwH14sXxgyjU0PULL17ES3fL";
@@ -65,32 +69,50 @@
     };
 
     let currentTicker = null;
-    const status = document.getElementById("status");
-    const tickerDisplay = document.getElementById("tickerDisplay");
+    const tickerInput = document.getElementById("ticker");
+    const submitBtn = document.getElementById("submitBtn");
     const downloadBtn = document.getElementById("downloadBtn");
+    const status = document.getElementById("status");
 
-    // Initialize Grist API
-    grist.ready({
-      requiredAccess: "read table",
-      columns: [{ name: "Ticker", type: "Text" }]
-    });
+    // Validate ticker on submit
+    submitBtn.addEventListener("click", async () => {
+      const ticker = tickerInput.value.trim().toUpperCase();
+      if (!ticker) {
+        status.innerText = "Please enter a ticker.";
+        return;
+      }
 
-    // Capture Ticker from selected record
-    grist.onRecord(record => {
-      currentTicker = record.Ticker || null;
-      tickerDisplay.innerText = currentTicker ? `Selected ticker: ${currentTicker}` : "No ticker selected.";
-      downloadBtn.disabled = !currentTicker;
-      status.innerText = currentTicker ? "Ready to download." : "Please select a ticker in Stocks table.";
+      status.innerText = `Validating ticker ${ticker}...`;
+      submitBtn.disabled = true;
+      downloadBtn.disabled = true;
+
+      try {
+        const metricsUrl = `${PROXY_URL}${BASE_URL}${ticker}?limit=1&apikey=${API_KEY}`;
+        const metricsResp = await fetch(metricsUrl);
+        if (!metricsResp.ok || (await metricsResp.json()).length === 0) {
+          throw new Error("Ticker not found");
+        }
+        currentTicker = ticker;
+        status.innerText = `Ticker ${ticker} is valid. Click Download CSV.`;
+        downloadBtn.disabled = false;
+      } catch (e) {
+        status.innerText = `Ticker not found. Please try again.`;
+        tickerInput.value = "";
+        currentTicker = null;
+      } finally {
+        submitBtn.disabled = false;
+      }
     });
 
     // Download CSV on button click
     downloadBtn.addEventListener("click", async () => {
       if (!currentTicker) {
-        status.innerText = "No ticker selected in Stocks table.";
+        status.innerText = "No valid ticker selected.";
         return;
       }
 
       status.innerText = `Fetching data for ${currentTicker}...`;
+      downloadBtn.disabled = true;
 
       try {
         const metricsUrl = `${PROXY_URL}${BASE_URL}${currentTicker}?limit=40&apikey=${API_KEY}`;
@@ -133,10 +155,12 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        status.innerText = `CSV for ${currentTicker} downloaded. Open and copy/paste into StockQtlyHistory.`;
+        status.innerText = `CSV for ${currentTicker} downloaded.`;
       } catch (e) {
         status.innerText = `Error: ${e.message}`;
         console.error(e);
+      } finally {
+        downloadBtn.disabled = false;
       }
     });
   </script>
