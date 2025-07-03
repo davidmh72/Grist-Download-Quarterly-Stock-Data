@@ -1,131 +1,140 @@
-// Minimal CSS for button and status
-const style = document.createElement('style');
-style.textContent = `
-  button { padding: 0.6em 1.2em; font-size: 1em; }
-  #status { margin-top: 1em; white-space: pre-wrap; }
-`;
-document.head.appendChild(style);
-
-// Create UI elements
-const container = document.createElement('div');
-const title = document.createElement('h2');
-title.textContent = "Load Stock Quarterly History";
-const button = document.createElement('button');
-button.textContent = "Import from FMP";
-const status = document.createElement('div');
-status.id = "status";
-
-container.appendChild(title);
-container.appendChild(button);
-container.appendChild(status);
-document.body.appendChild(container);
-
-const API_KEY = "59fxpu34TwH14sXxgyjU0PULL17ES3fL";
-
-// Hardcoded table names
-const stocksTableId = "Stocks";
-const historyTableId = "StockQtlyHistory";
-
-// Map Grist field names to FMP JSON fields
-const fieldMap = {
-  Date: "date",
-  PEG: "pegRatio",
-  PE: "peRatio",
-  EPS: "eps",
-  ROE: "roe",
-  ROA: "roa",
-  DebtEquity: "debtToEquity",
-  CurrentRatio: "currentRatio",
-  QuickRatio: "quickRatio",
-  PB: "pbRatio",
-  DividendYield: "dividendYield",
-  RevenuePerShare: "revenuePerShare",
-  OperatingMargin: "operatingProfitMargin",
-  GrossMargin: "grossProfitMargin",
-  NetMargin: "netProfitMargin",
-  FCFPerShare: "freeCashFlowPerShare",
-  InterestCoverage: "interestCoverage",
-  SalesGrowth5Y: "fiveYRevenueGrowthPerShare",
-  SalesGrowth1Y: "revenueGrowth",
-  EarningsGrowth1Y: "netIncomeGrowth",
-  Price: "price",
-  ForwardEpsGrowth5Y: "forwardEpsGrowth5Yr"
-};
-
-let grist;
-
-// Receive grist API handle & config on message
-window.addEventListener("message", (event) => {
-  if (event.source !== window.parent) return;
-  grist = event.data;
-});
-
-async function loadData() {
-  if (!grist) {
-    status.innerText = "Widget not connected to Grist.";
-    return;
-  }
-
-  status.innerText = "Fetching tickers from Stocks table...";
-  try {
-    // Get all tickers from Stocks table
-    const stocksData = await grist.docApi.getTable(stocksTableId).fetch();
-    const tickers = stocksData.records.map(r => r.fields.Ticker).filter(Boolean);
-
-    if (tickers.length === 0) {
-      status.innerText = "No tickers found in Stocks table.";
-      return;
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Grist Stock Metrics Loader</title>
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 1.5em;
     }
+    h2 {
+      margin-top: 0;
+    }
+    button {
+      padding: 0.6em 1.2em;
+      font-size: 1em;
+      margin-top: 1em;
+    }
+    #status {
+      margin-top: 1.5em;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h2>Load Stock Quarterly History</h2>
+  <button id="loadBtn">Import from FMP</button>
+  <div id="status"></div>
 
-    status.innerText = `Found ${tickers.length} tickers. Fetching data...`;
+  <script>
+    const API_KEY = "59fxpu34TwH14sXxgyjU0PULL17ES3fL";
 
-    for (const ticker of tickers) {
-      status.innerText = `Fetching data for ${ticker}...`;
+    // Hardcoded table names
+    const stocksTableId = "Stocks";
+    const historyTableId = "StockQtlyHistory";
 
-      // Fetch key metrics (last 40 quarters)
-      const metricsUrl = `https://financialmodelingprep.com/api/v3/key-metrics/${ticker}?limit=40&apikey=${API_KEY}`;
-      const metricsResp = await fetch(metricsUrl);
-      if (!metricsResp.ok) throw new Error(`Failed to fetch key metrics for ${ticker}`);
-      const metricsJson = await metricsResp.json();
+    // Map Grist field names to FMP JSON fields
+    const fieldMap = {
+      Date: "date",
+      PEG: "pegRatio",
+      PE: "peRatio",
+      EPS: "eps",
+      ROE: "roe",
+      ROA: "roa",
+      DebtEquity: "debtToEquity",
+      CurrentRatio: "currentRatio",
+      QuickRatio: "quickRatio",
+      PB: "pbRatio",
+      DividendYield: "dividendYield",
+      RevenuePerShare: "revenuePerShare",
+      OperatingMargin: "operatingProfitMargin",
+      GrossMargin: "grossProfitMargin",
+      NetMargin: "netProfitMargin",
+      FCFPerShare: "freeCashFlowPerShare",
+      InterestCoverage: "interestCoverage",
+      SalesGrowth5Y: "fiveYRevenueGrowthPerShare",
+      SalesGrowth1Y: "revenueGrowth",
+      EarningsGrowth1Y: "netIncomeGrowth",
+      Price: "price",
+      ForwardEpsGrowth5Y: "forwardEpsGrowth5Yr"
+    };
 
-      // Fetch price history (for Price mapping)
-      const priceUrl = `https://financialmodelingprep.com/api/v3/historical-price-full/${ticker}?serietype=line&apikey=${API_KEY}`;
-      const priceResp = await fetch(priceUrl);
-      if (!priceResp.ok) throw new Error(`Failed to fetch price data for ${ticker}`);
-      const priceJson = await priceResp.json();
+    let grist;
 
-      // Map date → close price for quick lookup
-      const priceMap = {};
-      if (priceJson && priceJson.historical) {
-        priceJson.historical.forEach(p => {
-          priceMap[p.date] = p.close;
-        });
+    // Receive Grist API object from parent
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      grist = event.data;
+    });
+
+    async function loadData() {
+      const status = document.getElementById("status");
+
+      if (!grist) {
+        status.innerText = "Widget not connected to Grist.";
+        return;
       }
 
-      // Build records, with Ticker as first field
-      const records = metricsJson.map(entry => {
-        const rec = { Ticker: ticker };
-        for (const [gristCol, fmpField] of Object.entries(fieldMap)) {
-          if (gristCol === "Price") {
-            rec.Price = priceMap[entry.date] ?? null;
-          } else {
-            rec[gristCol] = entry[fmpField] ?? null;
-          }
-        }
-        return { fields: rec };
-      });
+      status.innerText = "Fetching tickers from Stocks table...";
 
-      // Bulk add records to StockQtlyHistory
-      await grist.docApi.applyUserActions([
-        ["BulkAddRecord", historyTableId, records]
-      ]);
+      try {
+        const stocksData = await grist.docApi.getTable(stocksTableId).fetch();
+        const tickers = stocksData.records.map(r => r.fields.Ticker).filter(Boolean);
+
+        if (tickers.length === 0) {
+          status.innerText = "No tickers found in Stocks table.";
+          return;
+        }
+
+        status.innerText = `Found ${tickers.length} tickers. Fetching data...`;
+
+        for (const ticker of tickers) {
+          status.innerText = `Fetching data for ${ticker}...`;
+
+          const metricsUrl = `https://financialmodelingprep.com/api/v3/key-metrics/${ticker}?limit=40&apikey=${API_KEY}`;
+          const metricsResp = await fetch(metricsUrl);
+          if (!metricsResp.ok) throw new Error(`Failed to fetch key metrics for ${ticker}`);
+          const metricsJson = await metricsResp.json();
+
+          const priceUrl = `https://financialmodelingprep.com/api/v3/historical-price-full/${ticker}?serietype=line&apikey=${API_KEY}`;
+          const priceResp = await fetch(priceUrl);
+          if (!priceResp.ok) throw new Error(`Failed to fetch price data for ${ticker}`);
+          const priceJson = await priceResp.json();
+
+          const priceMap = {};
+          if (priceJson && priceJson.historical) {
+            priceJson.historical.forEach(p => {
+              priceMap[p.date] = p.close;
+            });
+          }
+
+          const records = metricsJson.map(entry => {
+            const rec = { Ticker: ticker };
+            for (const [gristCol, fmpField] of Object.entries(fieldMap)) {
+              if (gristCol === "Price") {
+                rec.Price = priceMap[entry.date] ?? null;
+              } else {
+                rec[gristCol] = entry[fmpField] ?? null;
+              }
+            }
+            return { fields: rec };
+          });
+
+          await grist.docApi.applyUserActions([
+            ["BulkAddRecord", historyTableId, records]
+          ]);
+        }
+
+        status.innerText = "All data loaded successfully.";
+      } catch (e) {
+        status.innerText = "Error:\n" + e.message;
+        console.error(e);
+      }
     }
 
-    status.innerText = "All data loaded successfully!";
-  } catch (e) {
-    status.innerText = "Error loading data:\n" + e.message;
-    console.error(e);
-  }
-}
-
-button.onclick = loadData;
+    document.getElementById("loadBtn").addEventListener("click", loadData);
+  </script>
+</body>
+</html>
