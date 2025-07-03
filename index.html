@@ -2,40 +2,43 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Grist Stock Metrics Loader</title>
+  <title>Grist Stock Metrics Downloader</title>
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
-    body {
-      font-family: sans-serif;
-      padding: 1.5em;
-    }
-    h2 {
-      margin-top: 0;
-    }
-    button {
+    body { font-family: sans-serif; padding: 1.5em; }
+    h2 { margin-top: 0; }
+    #tickerDisplay, #sourceUrl { margin: 0.5em 0; font-size: 1em; }
+    #sourceUrl a { color: #1a73e8; text-decoration: none; }
+    #sourceUrl a:hover { text-decoration: underline; }
+    #downloadBtn {
       padding: 0.6em 1.2em;
       font-size: 1em;
-      margin-top: 1em;
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.2s;
     }
-    #status {
-      margin-top: 1.5em;
-      white-space: pre-wrap;
+    #downloadBtn:hover { background-color: #1557b0; }
+    #downloadBtn:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
     }
+    #status { margin-top: 1.5em; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h2>Load Stock Quarterly History</h2>
-  <button id="loadBtn">Import from FMP</button>
-  <div id="status"></div>
+  <h2>Download Stock Quarterly History</h2>
+  <div id="tickerDisplay">No ticker selected.</div>
+  <div id="sourceUrl">Source: <a href="https://financialmodelingprep.com/api/v3/key-metrics/" target="_blank">Financial Modeling Prep</a></div>
+  <button id="downloadBtn" disabled>Download CSV</button>
+  <div id="status">Initializing...</div>
 
   <script>
     const API_KEY = "59fxpu34TwH14sXxgyjU0PULL17ES3fL";
-
-    // Hardcoded table names
-    const stocksTableId = "Stocks";
-    const historyTableId = "StockQtlyHistory";
-
-    // Map Grist field names to FMP JSON fields
+    const PROXY_URL = "https://cors-anywhere.herokuapp.com/";
+    const BASE_URL = "https://financialmodelingprep.com/api/v3/key-metrics/";
     const fieldMap = {
       Date: "date",
       PEG: "pegRatio",
@@ -61,80 +64,81 @@
       ForwardEpsGrowth5Y: "forwardEpsGrowth5Yr"
     };
 
-    let grist;
+    let currentTicker = null;
+    const status = document.getElementById("status");
+    const tickerDisplay = document.getElementById("tickerDisplay");
+    const downloadBtn = document.getElementById("downloadBtn");
 
-    // Receive Grist API object from parent
-    window.addEventListener("message", (event) => {
-      if (event.source !== window.parent) return;
-      grist = event.data;
+    // Initialize Grist API
+    grist.ready({
+      requiredAccess: "read table",
+      columns: [{ name: "Ticker", type: "Text" }]
     });
 
-    async function loadData() {
-      const status = document.getElementById("status");
+    // Capture Ticker from selected record
+    grist.onRecord(record => {
+      currentTicker = record.Ticker || null;
+      tickerDisplay.innerText = currentTicker ? `Selected ticker: ${currentTicker}` : "No ticker selected.";
+      downloadBtn.disabled = !currentTicker;
+      status.innerText = currentTicker ? "Ready to download." : "Please select a ticker in Stocks table.";
+    });
 
-      if (!grist) {
-        status.innerText = "Widget not connected to Grist.";
+    // Download CSV on button click
+    downloadBtn.addEventListener("click", async () => {
+      if (!currentTicker) {
+        status.innerText = "No ticker selected in Stocks table.";
         return;
       }
 
-      status.innerText = "Fetching tickers from Stocks table...";
+      status.innerText = `Fetching data for ${currentTicker}...`;
 
       try {
-        const stocksData = await grist.docApi.getTable(stocksTableId).fetch();
-        const tickers = stocksData.records.map(r => r.fields.Ticker).filter(Boolean);
+        const metricsUrl = `${PROXY_URL}${BASE_URL}${currentTicker}?limit=40&apikey=${API_KEY}`;
+        const metricsResp = await fetch(metricsUrl);
+        if (!metricsResp.ok) throw new Error(`Failed to fetch metrics: ${metricsResp.statusText}`);
+        const metricsJson = await metricsResp.json();
 
-        if (tickers.length === 0) {
-          status.innerText = "No tickers found in Stocks table.";
-          return;
-        }
+        const priceUrl = `${PROXY_URL}https://financialmodelingprep.com/api/v3/historical-price-full/${currentTicker}?serietype=line&apikey=${API_KEY}`;
+        const priceResp = await fetch(priceUrl);
+        if (!priceResp.ok) throw new Error(`Failed to fetch price: ${priceResp.statusText}`);
+        const priceJson = await priceResp.json();
 
-        status.innerText = `Found ${tickers.length} tickers. Fetching data...`;
-
-        for (const ticker of tickers) {
-          status.innerText = `Fetching data for ${ticker}...`;
-
-          const metricsUrl = `https://financialmodelingprep.com/api/v3/key-metrics/${ticker}?limit=40&apikey=${API_KEY}`;
-          const metricsResp = await fetch(metricsUrl);
-          if (!metricsResp.ok) throw new Error(`Failed to fetch key metrics for ${ticker}`);
-          const metricsJson = await metricsResp.json();
-
-          const priceUrl = `https://financialmodelingprep.com/api/v3/historical-price-full/${ticker}?serietype=line&apikey=${API_KEY}`;
-          const priceResp = await fetch(priceUrl);
-          if (!priceResp.ok) throw new Error(`Failed to fetch price data for ${ticker}`);
-          const priceJson = await priceResp.json();
-
-          const priceMap = {};
-          if (priceJson && priceJson.historical) {
-            priceJson.historical.forEach(p => {
-              priceMap[p.date] = p.close;
-            });
-          }
-
-          const records = metricsJson.map(entry => {
-            const rec = { Ticker: ticker };
-            for (const [gristCol, fmpField] of Object.entries(fieldMap)) {
-              if (gristCol === "Price") {
-                rec.Price = priceMap[entry.date] ?? null;
-              } else {
-                rec[gristCol] = entry[fmpField] ?? null;
-              }
-            }
-            return { fields: rec };
+        const priceMap = {};
+        if (priceJson?.historical) {
+          priceJson.historical.forEach(p => {
+            priceMap[p.date] = p.close;
           });
-
-          await grist.docApi.applyUserActions([
-            ["BulkAddRecord", historyTableId, records]
-          ]);
         }
 
-        status.innerText = "All data loaded successfully.";
+        // Create CSV
+        const headers = ["Ticker", ...Object.keys(fieldMap)];
+        const rows = metricsJson.map(entry => {
+          const row = [currentTicker];
+          for (const gristCol of Object.keys(fieldMap)) {
+            const value = gristCol === "Price" ? priceMap[entry.date] ?? "" : entry[fieldMap[gristCol]] ?? "";
+            row.push(`"${value}"`);
+          }
+          return row.join(",");
+        });
+        const csvContent = [headers.join(","), ...rows].join("\n");
+
+        // Trigger download
+        const blob = new Blob([csvContent], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${currentTicker}_StockQtlyHistory.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        status.innerText = `CSV for ${currentTicker} downloaded. Open and copy/paste into StockQtlyHistory.`;
       } catch (e) {
-        status.innerText = "Error:\n" + e.message;
+        status.innerText = `Error: ${e.message}`;
         console.error(e);
       }
-    }
-
-    document.getElementById("loadBtn").addEventListener("click", loadData);
+    });
   </script>
 </body>
 </html>
